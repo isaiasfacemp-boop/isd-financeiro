@@ -1,0 +1,16 @@
+{
+  "name": "financecontrol",
+  "version": "1.0.0",
+  "description": "Sistema financeiro multi-empresa - Cloudflare Workers + D1",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create financecontrol",
+    "db:migrate": "wrangler d1 execute financecontrol --file=./migrations/0001_schema.sql",
+    "db:migrate:local": "wrangler d1 execute financecontrol --local --file=./migrations/0001_schema.sql",
+    "db:studio": "wrangler d1 studio financecontrol"
+  },
+  "devDependencies": {
+    "wrangler": "^3.80.0"
+  }
+}

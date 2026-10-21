@@ -1,0 +1,22 @@
+name = "financecontrol"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# Servir arquivos estáticos da pasta public/
+[assets]
+directory = "public"
+binding = "ASSETS"
+
+# Banco de dados D1
+[[d1_databases]]
+binding = "DB"
+database_name = "financecontrol"
+database_id = "COLE_O_ID_AQUI"   # substitua pelo ID após criar: wrangler d1 create financecontrol
+
+# Variáveis de ambiente
+[vars]
+# JWT_SECRET é configurado via: wrangler secret put JWT_SECRET
+
+# Para desenvolvimento local
+[dev]
+port = 8787
