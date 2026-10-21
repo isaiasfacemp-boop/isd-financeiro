@@ -11,7 +11,7 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "financecontrol"
-database_id = "COLE_O_ID_AQUI"   # substitua pelo ID após criar: wrangler d1 create financecontrol
+database_id = "f7966f26-fb7a-4830-8bea-3760f1bb2fa3"   # substitua pelo ID após criar: wrangler d1 create financecontrol
 
 # Variáveis de ambiente
 [vars]
