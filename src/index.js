@@ -109,6 +109,15 @@ export default {
 };
 
 async function handleAPI(path, method, req, env, url) {
+  try {
+    return await handleAPIInner(path, method, req, env, url);
+  } catch (e) {
+    console.error('API error', path, e && e.message);
+    return err('Erro interno no servidor. Tente novamente.', 500);
+  }
+}
+
+async function handleAPIInner(path, method, req, env, url) {
   const db = env.DB;
 
   // ── Auth ────────────────────────────────────────────────────────────────
@@ -141,7 +150,15 @@ async function handleAPI(path, method, req, env, url) {
     ]);
 
     const token = await signToken({ emp: emp_id, uid: user_id, adm: true, exp: Math.floor(Date.now() / 1000) + 30 * 86400 }, env.JWT_SECRET || 'fc_secret_2024');
-    return json({ token, empresa: { id: emp_id, nome: empresa_nome, codigo } });
+    return json({
+      token,
+      empresa: { id: emp_id, nome: empresa_nome, codigo },
+      usuario: {
+        id: user_id, nome: admin_nome || 'Administrador', login: admin_login.toUpperCase(),
+        isAdmin: true, trocaSenha: false,
+        permissoes: ['dashboard','consolidado','relatorio','pagar','receber','clientes','calculadora','perfil']
+      }
+    });
   }
 
   if (path === 'auth/login' && method === 'POST') {
@@ -196,7 +213,8 @@ async function handleAPI(path, method, req, env, url) {
       const { results } = await db.prepare(
         `SELECT e.id, e.nome, e.codigo, e.ativo, e.criado_em,
                 (SELECT COUNT(*) FROM usuarios u WHERE u.empresa_id = e.id) AS usuarios,
-                (SELECT COUNT(*) FROM contas c WHERE c.empresa_id = e.id) AS contas
+                (SELECT COALESCE(SUM(CASE WHEN json_valid(d.valor) THEN json_array_length(d.valor) ELSE 0 END), 0)
+                 FROM dados d WHERE d.empresa_id = e.id AND d.chave LIKE 'fc\_contas\_%' ESCAPE '\') AS contas
          FROM empresas e ORDER BY e.criado_em DESC`
       ).all();
       return json(results);
@@ -237,6 +255,7 @@ async function handleAPI(path, method, req, env, url) {
 
       if (method === 'DELETE') {
         await db.batch([
+          db.prepare('DELETE FROM dados      WHERE empresa_id=?').bind(id),
           db.prepare('DELETE FROM auditoria  WHERE empresa_id=?').bind(id),
           db.prepare('DELETE FROM contas     WHERE empresa_id=?').bind(id),
           db.prepare('DELETE FROM clientes   WHERE empresa_id=?').bind(id),
@@ -257,6 +276,45 @@ async function handleAPI(path, method, req, env, url) {
   const emp_id = session.emp;
   const empAtiva = await db.prepare('SELECT ativo FROM empresas WHERE id=?').bind(emp_id).first();
   if (!empAtiva || !empAtiva.ativo) return err('Empresa desativada', 403);
+
+  // ── Dados do aplicativo (por empresa, com controle de versão) ──────────
+  if (path === 'dados' && method === 'GET') {
+    const { results } = await db.prepare('SELECT chave, valor, versao FROM dados WHERE empresa_id=?').bind(emp_id).all();
+    const out = {};
+    for (const r of results) out[r.chave] = { valor: r.valor, versao: r.versao };
+    return json(out);
+  }
+  const dados_match = path.match(/^dados\/([^/]+)$/);
+  if (dados_match) {
+    let chave = '';
+    try { chave = decodeURIComponent(dados_match[1]); } catch { return err('Chave inválida'); }
+    if (!/^fc_[A-Za-z0-9_\-]{1,80}$/.test(chave)) return err('Chave inválida');
+
+    if (method === 'PUT') {
+      const b = await req.json();
+      if (typeof b.valor !== 'string') return err('Valor inválido');
+      if (b.valor.length > 1500000) return err('Dados grandes demais para salvar (limite 1,5 MB nesta lista)', 413);
+      const base = Number.isInteger(b.versao) ? b.versao : 0;
+      const atual = await db.prepare('SELECT versao FROM dados WHERE empresa_id=? AND chave=?').bind(emp_id, chave).first();
+      if (!atual) {
+        const r = await db.prepare('INSERT INTO dados(empresa_id,chave,valor,versao) VALUES(?,?,?,1) ON CONFLICT DO NOTHING')
+          .bind(emp_id, chave, b.valor).run();
+        if ((r.meta?.changes ?? 0) !== 1) return json({ error: 'conflito' }, 409);
+        return json({ ok: true, versao: 1 });
+      }
+      if (atual.versao !== base) return json({ error: 'conflito', versao: atual.versao }, 409);
+      const r = await db.prepare(
+        `UPDATE dados SET valor=?, versao=versao+1, atualizado_em=datetime('now')
+         WHERE empresa_id=? AND chave=? AND versao=?`
+      ).bind(b.valor, emp_id, chave, base).run();
+      if ((r.meta?.changes ?? 0) !== 1) return json({ error: 'conflito' }, 409);
+      return json({ ok: true, versao: base + 1 });
+    }
+    if (method === 'DELETE') {
+      await db.prepare('DELETE FROM dados WHERE empresa_id=? AND chave=?').bind(emp_id, chave).run();
+      return json({ ok: true });
+    }
+  }
 
   // ── Perfis ──────────────────────────────────────────────────────────────
   if (path === 'perfis') {
