@@ -214,7 +214,7 @@ async function handleAPIInner(path, method, req, env, url) {
         `SELECT e.id, e.nome, e.codigo, e.ativo, e.criado_em,
                 (SELECT COUNT(*) FROM usuarios u WHERE u.empresa_id = e.id) AS usuarios,
                 (SELECT COALESCE(SUM(CASE WHEN json_valid(d.valor) THEN json_array_length(d.valor) ELSE 0 END), 0)
-                 FROM dados d WHERE d.empresa_id = e.id AND d.chave LIKE 'fc\_contas\_%' ESCAPE '\') AS contas
+                 FROM dados d WHERE d.empresa_id = e.id AND instr(d.chave, 'fc_contas_') = 1) AS contas
          FROM empresas e ORDER BY e.criado_em DESC`
       ).all();
       return json(results);
