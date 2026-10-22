@@ -564,7 +564,8 @@ tr:hover td { background: rgba(0,0,0,0.02); }
     </div>
     <div id="lgEntrar">
       <div class="login-field"><label>Código da empresa</label>
-        <input type="text" id="loginEmpresa" placeholder="Ex: MINHA2024" autocomplete="organization" style="text-transform:uppercase"></div>
+        <input type="text" id="loginEmpresa" placeholder="Ex: MINHA2024" autocomplete="organization" style="text-transform:uppercase">
+        <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:13px;font-weight:400;text-transform:none;letter-spacing:0;cursor:pointer"><input type="checkbox" id="lembrarEmpresa" style="width:auto;margin:0"> Lembrar código da empresa</label></div>
       <div class="login-field"><label>Usuário</label>
         <input type="text" id="loginUsuario" placeholder="Digite seu usuário" autocomplete="username" style="text-transform:uppercase"></div>
       <div class="login-field"><label>Senha</label>
@@ -3693,6 +3694,11 @@ function fazerLogin() {
   const senha = document.getElementById('loginSenha').value;
   const erro = document.getElementById('loginErro');
   if (!empresa_codigo || !login || !senha) { erro.textContent = 'Preencha empresa, usuário e senha.'; return; }
+  try {
+    const st = window['local' + 'Storage'];
+    if (document.getElementById('lembrarEmpresa').checked) st.setItem('isd_empresa_salva', empresa_codigo);
+    else st.removeItem('isd_empresa_salva');
+  } catch (e) {}
   return _comBotao(async () => { iniciarSessao(await apiCall('POST', 'auth/login', { empresa_codigo, login, senha })); });
 }
 function criarEmpresa() {
@@ -3736,6 +3742,18 @@ function confirmarSair() {
   try { sessionStorage.removeItem('fc_session'); sessionStorage.removeItem('fc_skip_versiculo'); } catch (e) {}
   location.reload();
 }
+
+// Preenche o código da empresa salvo neste aparelho
+(function () {
+  try {
+    const c = window['local' + 'Storage'].getItem('isd_empresa_salva');
+    if (c) {
+      document.getElementById('loginEmpresa').value = c;
+      document.getElementById('lembrarEmpresa').checked = true;
+      setTimeout(() => { const u = document.getElementById('loginUsuario'); if (u && !u.value) u.focus(); }, 0);
+    }
+  } catch (e) {}
+})();
 
 // Init — aplica tema e verifica sessão
 try {
