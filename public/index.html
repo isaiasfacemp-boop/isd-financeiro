@@ -3716,6 +3716,7 @@ function criarEmpresa() {
 }
 async function iniciarSessao(res, restaurando) {
   API_TOKEN = res.token; EMPRESA = res.empresa; usuarioAtual = { ...res.usuario };
+  try { window['local' + 'Storage'].setItem('isd_empresa_criada', '1'); } catch (e) {}
   await carregarDados();
   if (usuarioAtual.isAdmin) await carregarUsuarios();
   try { sessionStorage.setItem('fc_session', JSON.stringify({ token: API_TOKEN, empresa: EMPRESA, usuario: usuarioAtual })); } catch (e) {}
