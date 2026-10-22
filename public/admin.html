@@ -1,0 +1,74 @@
+<title>Painel ISD Financeiro</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<style>
+:root{--bg:#f3f4f8;--card:#fff;--fg:#1b1e2b;--muted:#6b7080;--line:#e2e5ee;--accent:#2563eb;--danger:#dc2626;--ok:#16a34a}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0d0f16;--card:#1a1d27;--fg:#e8eaf0;--muted:#8b90a0;--line:#2a2d3a;--accent:#3b82f6;--danger:#f87171;--ok:#4ade80;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px system-ui,sans-serif;padding:20px max(16px,env(safe-area-inset-left))}
+.wrap{max-width:980px;margin:0 auto}
+h1{font-size:20px;margin:0 0 4px} .sub{color:var(--muted);margin:0 0 18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+input{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font-size:14px}
+button{padding:8px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer;font-size:13px}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.danger{color:var(--danger);border-color:var(--danger)}
+.login{max-width:340px;margin:12vh auto;display:flex;flex-direction:column;gap:10px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.tbl{overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:640px}
+th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.pill{padding:2px 9px;border-radius:99px;font-size:12px;font-weight:600}
+.on{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.off{background:color-mix(in srgb,var(--danger) 18%,transparent);color:var(--danger)}
+.acts{display:flex;gap:6px;flex-wrap:wrap}
+#msg{min-height:20px;color:var(--danger);margin:8px 0}
+</style>
+<div class="wrap" id="app"></div>
+<script>
+let T=null;try{T=sessionStorage.getItem('adm_tk')}catch(e){}
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(method,path,body){
+  const r=await fetch('/api/'+path,{method,headers:{'Content-Type':'application/json',...(T?{Authorization:'Bearer '+T}:{})},body:body?JSON.stringify(body):undefined});
+  const d=await r.json().catch(()=>({}));
+  if(r.status===401&&T&&path!=='admin/login'){T=null;try{sessionStorage.removeItem('adm_tk')}catch(e){}render();}
+  if(!r.ok)throw new Error(d.error||'Erro '+r.status);
+  return d;
+}
+function render(){
+  if(!T){
+    $('#app').innerHTML=`<div class="card login"><h1>Painel ISD Financeiro</h1><p class="sub">Acesso do administrador do sistema</p>
+    <input id="pw" type="password" placeholder="Senha mestre" onkeydown="if(event.key==='Enter')entrar()"><button class="primary" onclick="entrar()">Entrar</button><div id="msg"></div></div>`;
+    return;
+  }
+  $('#app').innerHTML=`<div class="top"><div><h1>Empresas</h1><p class="sub" style="margin:0">Todas as empresas cadastradas no sistema</p></div>
+  <div class="acts"><button onclick="carregar()">Atualizar</button><button onclick="sair()">Sair</button></div></div>
+  <div id="msg"></div><div class="card tbl"><div id="lista">Carregando…</div></div>`;
+  carregar();
+}
+async function entrar(){
+  try{const d=await api('POST','admin/login',{senha:$('#pw').value});T=d.token;try{sessionStorage.setItem('adm_tk',T)}catch(e){}render();}
+  catch(e){$('#msg').textContent=e.message}
+}
+function sair(){T=null;try{sessionStorage.removeItem('adm_tk')}catch(e){}render();}
+let EMP=[];
+async function carregar(){
+  try{EMP=await api('GET','admin/empresas');}catch(e){$('#msg').textContent=e.message;return;}
+  $('#msg').textContent='';
+  if(!EMP.length){$('#lista').textContent='Nenhuma empresa cadastrada ainda.';return;}
+  $('#lista').innerHTML=`<table><thead><tr><th>Empresa</th><th>Código</th><th>Usuários</th><th>Contas</th><th>Criada em</th><th>Status</th><th>Ações</th></tr></thead><tbody>`+
+  EMP.map((e,i)=>`<tr><td><b>${esc(e.nome)}</b></td><td>${esc(e.codigo)}</td><td>${e.usuarios}</td><td>${e.contas}</td><td>${esc((e.criado_em||'').slice(0,10))}</td>
+  <td><span class="pill ${e.ativo?'on':'off'}">${e.ativo?'Ativa':'Bloqueada'}</span></td>
+  <td><div class="acts"><button onclick="alternar(${i})">${e.ativo?'Bloquear':'Ativar'}</button><button onclick="renomear(${i})">Renomear</button><button onclick="trocarCodigo(${i})">Código</button><button onclick="resetar(${i})">Nova senha admin</button><button class="danger" onclick="excluir(${i})">Excluir</button></div></td></tr>`).join('')+`</tbody></table>`;
+}
+async function acao(fn){try{await fn();await carregar();}catch(e){$('#msg').textContent=e.message}}
+function alternar(i){const e=EMP[i];acao(()=>api('PUT','admin/empresas/'+e.id,{ativo:e.ativo?0:1}));}
+function renomear(i){const e=EMP[i];const v=prompt('Novo nome da empresa:',e.nome);if(v&&v.trim())acao(()=>api('PUT','admin/empresas/'+e.id,{nome:v}));}
+function trocarCodigo(i){const e=EMP[i];const v=prompt('Novo código de acesso (o cliente passa a entrar com ele):',e.codigo);if(v&&v.trim())acao(()=>api('PUT','admin/empresas/'+e.id,{codigo:v}));}
+function resetar(i){const e=EMP[i];const v=prompt('Nova senha do administrador de "'+e.nome+'" (mín. 4 caracteres):');if(v)acao(()=>api('POST','admin/empresas/'+e.id+'/reset-admin',{nova_senha:v}));}
+function excluir(i){const e=EMP[i];const v=prompt('EXCLUIR "'+e.nome+'" e TODOS os dados dela. Não tem volta.\nDigite o código da empresa ('+e.codigo+') para confirmar:');if(v&&v.toUpperCase().trim()===e.codigo)acao(()=>api('DELETE','admin/empresas/'+e.id));else if(v)$('#msg').textContent='Código não confere. Nada foi excluído.';}
+render();
+</script>

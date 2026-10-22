@@ -56,8 +56,18 @@ async function verifyToken(token, secret) {
     const sigBuf = Uint8Array.from(atob(sig), c => c.charCodeAt(0));
     const valid  = await crypto.subtle.verify('HMAC', key, sigBuf, new TextEncoder().encode(data));
     if (!valid) return null;
-    return JSON.parse(atob(body));
+    const payload = JSON.parse(atob(body));
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
   } catch { return null; }
+}
+
+// Comparação de segredos sem vazar tamanho/posição (compara hashes)
+async function safeEqual(a, b) {
+  const [ha, hb] = await Promise.all([sha256(String(a)), sha256(String(b))]);
+  let diff = 0;
+  for (let i = 0; i < ha.length; i++) diff |= ha.charCodeAt(i) ^ hb.charCodeAt(i);
+  return diff === 0;
 }
 
 async function auth(req, env) {
@@ -103,7 +113,12 @@ async function handleAPI(path, method, req, env, url) {
 
   // ── Auth ────────────────────────────────────────────────────────────────
   if (path === 'auth/register' && method === 'POST') {
-    const { empresa_nome, empresa_codigo, admin_nome, admin_login, admin_senha } = await req.json();
+    const { empresa_nome, empresa_codigo, admin_nome, admin_login, admin_senha, codigo_ativacao } = await req.json();
+    if (!env.ACTIVATION_CODE) return err('Cadastro de novas empresas desativado', 403);
+    if (!codigo_ativacao || !(await safeEqual(codigo_ativacao, env.ACTIVATION_CODE))) {
+      await new Promise(r => setTimeout(r, 500));
+      return err('Código de ativação inválido', 403);
+    }
     if (!empresa_nome || !empresa_codigo || !admin_login || !admin_senha)
       return err('Campos obrigatórios faltando');
 
@@ -125,7 +140,7 @@ async function handleAPI(path, method, req, env, url) {
         .bind(uid(), emp_id, 'GERAL', '#2563EB', '🏢'),
     ]);
 
-    const token = await signToken({ emp: emp_id, uid: user_id, adm: true }, env.JWT_SECRET || 'fc_secret_2024');
+    const token = await signToken({ emp: emp_id, uid: user_id, adm: true, exp: Math.floor(Date.now() / 1000) + 30 * 86400 }, env.JWT_SECRET || 'fc_secret_2024');
     return json({ token, empresa: { id: emp_id, nome: empresa_nome, codigo } });
   }
 
@@ -144,7 +159,7 @@ async function handleAPI(path, method, req, env, url) {
     if (!user) return err('Login ou senha incorretos', 401);
 
     const token = await signToken(
-      { emp: emp.id, uid: user.id, adm: !!user.is_admin },
+      { emp: emp.id, uid: user.id, adm: !!user.is_admin, exp: Math.floor(Date.now() / 1000) + 30 * 86400 },
       env.JWT_SECRET || 'fc_secret_2024'
     );
     return json({
@@ -158,10 +173,90 @@ async function handleAPI(path, method, req, env, url) {
     });
   }
 
+  // ── Painel mestre (só o dono do sistema) ───────────────────────────────
+  if (path.startsWith('admin/')) {
+    if (!env.MASTER_PASSWORD) return err('Painel mestre desativado', 403);
+    const secret = (env.JWT_SECRET || 'fc_secret_2024') + ':master';
+
+    if (path === 'admin/login' && method === 'POST') {
+      const { senha } = await req.json();
+      if (!senha || !(await safeEqual(senha, env.MASTER_PASSWORD))) {
+        await new Promise(r => setTimeout(r, 800));
+        return err('Senha incorreta', 401);
+      }
+      const token = await signToken({ master: true, exp: Math.floor(Date.now() / 1000) + 8 * 3600 }, secret);
+      return json({ token });
+    }
+
+    const tk = (req.headers.get('Authorization') || '').replace('Bearer ', '');
+    const mp = tk ? await verifyToken(tk, secret) : null;
+    if (!mp || !mp.master) return err('Não autenticado', 401);
+
+    if (path === 'admin/empresas' && method === 'GET') {
+      const { results } = await db.prepare(
+        `SELECT e.id, e.nome, e.codigo, e.ativo, e.criado_em,
+                (SELECT COUNT(*) FROM usuarios u WHERE u.empresa_id = e.id) AS usuarios,
+                (SELECT COUNT(*) FROM contas c WHERE c.empresa_id = e.id) AS contas
+         FROM empresas e ORDER BY e.criado_em DESC`
+      ).all();
+      return json(results);
+    }
+
+    const m = path.match(/^admin\/empresas\/([^/]+)(\/reset-admin)?$/);
+    if (m) {
+      const id = m[1];
+      const emp = await db.prepare('SELECT id FROM empresas WHERE id=?').bind(id).first();
+      if (!emp) return err('Empresa não encontrada', 404);
+
+      if (m[2] && method === 'POST') {
+        const { nova_senha } = await req.json();
+        if (!nova_senha || nova_senha.length < 4) return err('Senha muito curta');
+        const hash = await sha256(nova_senha);
+        const r = await db.prepare(
+          `UPDATE usuarios SET senha_hash=? WHERE id=(
+             SELECT id FROM usuarios WHERE empresa_id=? AND is_admin=1 ORDER BY criado_em LIMIT 1)`
+        ).bind(hash, id).run();
+        return json({ ok: true, alterados: r.meta?.changes ?? 0 });
+      }
+
+      if (method === 'PUT') {
+        const b = await req.json();
+        const sets = [], vals = [];
+        if (typeof b.nome === 'string' && b.nome.trim()) { sets.push('nome=?'); vals.push(b.nome.trim()); }
+        if (typeof b.ativo === 'number' || typeof b.ativo === 'boolean') { sets.push('ativo=?'); vals.push(b.ativo ? 1 : 0); }
+        if (typeof b.codigo === 'string' && b.codigo.trim()) {
+          const novo = b.codigo.toUpperCase().trim();
+          const dup = await db.prepare('SELECT id FROM empresas WHERE codigo=? AND id<>?').bind(novo, id).first();
+          if (dup) return err('Código já em uso por outra empresa');
+          sets.push('codigo=?'); vals.push(novo);
+        }
+        if (!sets.length) return err('Nada para alterar');
+        await db.prepare(`UPDATE empresas SET ${sets.join(',')} WHERE id=?`).bind(...vals, id).run();
+        return json({ ok: true });
+      }
+
+      if (method === 'DELETE') {
+        await db.batch([
+          db.prepare('DELETE FROM auditoria  WHERE empresa_id=?').bind(id),
+          db.prepare('DELETE FROM contas     WHERE empresa_id=?').bind(id),
+          db.prepare('DELETE FROM clientes   WHERE empresa_id=?').bind(id),
+          db.prepare('DELETE FROM categorias WHERE empresa_id=?').bind(id),
+          db.prepare('DELETE FROM perfis     WHERE empresa_id=?').bind(id),
+          db.prepare('DELETE FROM usuarios   WHERE empresa_id=?').bind(id),
+          db.prepare('DELETE FROM empresas   WHERE id=?').bind(id),
+        ]);
+        return json({ ok: true });
+      }
+    }
+    return err('Rota não encontrada', 404);
+  }
+
   // Rotas autenticadas
   const session = await auth(req, env);
-  if (!session) return err('Não autenticado', 401);
+  if (!session || !session.emp) return err('Não autenticado', 401);
   const emp_id = session.emp;
+  const empAtiva = await db.prepare('SELECT ativo FROM empresas WHERE id=?').bind(emp_id).first();
+  if (!empAtiva || !empAtiva.ativo) return err('Empresa desativada', 403);
 
   // ── Perfis ──────────────────────────────────────────────────────────────
   if (path === 'perfis') {
